@@ -1,0 +1,544 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description:  This template deploys a VPC, with a pair of public and private subnets spread
+  across two Availability Zones. It deploys an internet gateway, with a default
+  route on the public subnets. It deploys a pair of NAT gateways (one in each AZ),
+  and default routes for them in the private subnets.   And Create OpenVPN server in
+  each public subnet.  And creates a syslog/splunk server in each private subnet.  The
+  route table id's are published, for easier automation with client subnets, to create
+  peering connections.
+
+Parameters:
+  EnvironmentName:
+    Description: Hub management domain
+    Type: String
+    Default: Hub
+
+  Region:
+    Description: Central Canada region's Datacenter
+    Type: String
+    Default: ca-central-1
+  AvailabilityZoneCa1:
+    Description: Central Canada region's Datacenter, Rack A
+    Type: String
+    Default: ca-central-1a
+  AvailabilityZoneIdCa1:
+    Description: Central Canada region's Datacenter, Rack A
+    Type: String
+    Default: cac1-az1
+
+  AvailbilityZoneOfStack1:
+    Description: Fail one, might as well fail the other modules in the stack, unit1
+    Type: String
+    Default: ca-central-1a
+
+  AvailbilityZoneOfStack2:
+    Description: Fail one, might as well fail the other modules in the stack, unit2
+    Type: String
+    Default: ca-central-1b
+
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 192.168.0.0/17
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 192.168.1.0/24
+
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 192.168.2.0/24
+
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 192.168.64.0/24
+
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 192.168.65.0/24
+
+
+Mappings:
+# OpenVpn is NOT FREE on AWS.  
+# https://us-west-2.console.aws.amazon.com/ec2/home?region=us-west-2#AMICatalog
+  OpenVpnMap:
+    us-east-1:
+      "AMI": "ami-0ff4c507ce023e431"
+    us-west-2:
+      "AMI": "ami-06262db40cf9a9a80"
+    ca-central-1:
+      "AMI": "ami-0c024f4b16d6d6587"
+  LinuxMap:
+    us-east-1:
+      "AMI": "ami-0742b4e673072066f"
+    us-west-2:
+      "AMI": "ami-0518bb0e75d3619ca"
+    ca-central-1:
+      "AMI": "ami-0d04e6652cb408e57"
+
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ1)
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ1)
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ2)
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ2)
+
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes (AZ1)
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes (AZ2)
+
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+
+  NoIngressSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "no-ingress-sg"
+      GroupDescription: "Security group with no ingress rule"
+      VpcId: !Ref VPC
+
+  VpnSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable VPN from 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: udp
+          FromPort: 1194
+          ToPort: 1194
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 943
+          ToPort: 943
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VPC 
+
+  SyslogSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable sending syslog and retreiving via splunk 
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp
+          FromPort: 514
+          ToPort: 514
+          CidrIp: 192.168.0.0/17
+      VpcId: !Ref VPC 
+
+  EC2VPN1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [OpenVpnMap, !Ref "AWS::Region", AMI]
+      InstanceType: t2.micro
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds: 
+        - !Ref VpnSecurityGroup
+      Tags:
+       - Key: Name
+         Value: VPN-Server-1
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            yum install openssh-server -y
+            service sshd start 
+            #echo "<html><body><h1>Hello from Region ${AWS::Region}<h1></body></html>" > /var/www/html/index.html
+
+  EC2VPN2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [OpenVpnMap, !Ref "AWS::Region", AMI]
+      InstanceType: t2.micro
+      SubnetId: !Ref PublicSubnet2
+      SecurityGroupIds: 
+        - !Ref VpnSecurityGroup
+      Tags:
+       - Key: Name
+         Value: VPN-Server-2
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            yum install openssh-server -y
+            service sshd start  
+            # echo "<html><body><h1>Hello from Region ${AWS::Region}<h1></body></html>" > /var/www/html/index.html
+
+  EC2Splunk1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [LinuxMap, !Ref "AWS::Region", AMI]
+      InstanceType: t2.micro
+      SubnetId: !Ref PrivateSubnet1
+      SecurityGroupIds: 
+        - !Ref SyslogSecurityGroup
+      Tags:
+       - Key: Name
+         Value: Syslog-Server-1
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            yum install –enablerepo=epel alien -y
+            yum install –enablerepo=epel rpmrebuild -y
+            wget -O splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.deb 'https://www.splunk.com/page/download_track?file=8.2.1/linux/splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.deb&ac=&wget=true&name=wget&platform=Linux&architecture=x86_64&version=8.2.1&product=splunk&typed=release'
+            alien –to-rpm –scripts splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.deb
+            yum localinstall splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.rpm
+
+  EC2Splunk2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [LinuxMap, !Ref "AWS::Region", AMI]
+      InstanceType: t2.micro
+      SubnetId: !Ref PrivateSubnet2
+      SecurityGroupIds: 
+        - !Ref SyslogSecurityGroup
+      Tags:
+       - Key: Name
+         Value: Syslog-Server-2
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            yum install –enablerepo=epel alien -y
+            yum install –enablerepo=epel rpmrebuild -y
+            wget -O splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.deb 'https://www.splunk.com/page/download_track?file=8.2.1/linux/splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.deb&ac=&wget=true&name=wget&platform=Linux&architecture=x86_64&version=8.2.1&product=splunk&typed=release'
+            alien –to-rpm –scripts splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.deb
+            yum localinstall splunk-8.2.1-ddff1c41e5cf-linux-2.6-amd64.rpm
+
+  # everything after this, is required for getting route table id
+  LambdaIAMRole:
+    Type: 'AWS::IAM::Role'
+    DependsOn: VPC
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:Describe*'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaIAMRole.Arn
+      Runtime: python3.9
+      Timeout: 50
+      Code:
+        ZipFile: |
+            from __future__ import print_function
+            import json
+            import boto3
+            import urllib3
+            import cfnresponse
+
+            SUCCESS = "SUCCESS"
+            FAILED = "FAILED"
+
+            http = urllib3.PoolManager()
+
+            print('Loading function')
+            ec2 = boto3.client('ec2')
+
+            def lambda_handler(event, context):
+                print("Received event: " + json.dumps(event, indent=2))
+                responseData={}
+                try:
+                    if event['RequestType'] == 'Delete':
+                        print("Request Type:",event['RequestType'])
+                        print("Delete Request - No Physical resources to delete")
+                    elif event['RequestType'] == 'Create':
+                        print("Request Type:",event['RequestType'])
+                        VPCID=event['ResourceProperties']['VPCID']
+                        RouteTableID=get_vpc(VPCID)
+                        responseData={'RouteTableID':RouteTableID}
+                        print("Sending response to custom resource")
+                    elif event['RequestType'] == 'Update':
+                        print("Request Type:",event['RequestType'])
+                        VPCID=event['ResourceProperties']['VPCID']
+                        RouteTableID=get_vpc(VPCID)
+                        responseData={'RouteTableID':RouteTableID}
+                        print("Sending response to custom resource")
+                    responseStatus = 'SUCCESS'
+                    print("responseStatus: " + responseStatus)
+                    cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, "CustomResourcePhysicalID")
+                except Exception as e:
+                    print('Failed to process:', e)
+                    responseStatus = 'FAILURE'
+                    responseData = {'Failure': 'Something bad happened.'}
+                    cfnresponse.send(event, context, cfnresponse.FAILURE, responseData, "CustomResourcePhysicalID")
+
+            def get_vpc(VPCID):
+                response = ec2.describe_route_tables (
+                  Filters=[
+                    {
+                      'Name': 'association.main',
+                      'Values': [ 'true' ]
+                    },
+                    {
+                      'Name': 'vpc-id',
+                      'Values': [ VPCID ]
+                    }
+                  ]
+                )
+                print("Printing the VPC Route Table ID ....")
+                RouteTableID=response['RouteTables'][0]['RouteTableId']
+                print(RouteTableID)
+                return RouteTableID
+
+            def send(event, context, responseStatus, responseData, physicalResourceId=None, noEcho=False):
+                responseUrl = event['ResponseURL']
+                print(responseUrl)
+                responseBody = {'Status': responseStatus,
+                                'Reason': 'See the details in CloudWatch Log Stream: ' + context.log_stream_name,
+                                'PhysicalResourceId': physicalResourceId or context.log_stream_name,
+                                'StackId': event['StackId'],
+                                'RequestId': event['RequestId'],
+                                'LogicalResourceId': event['LogicalResourceId'],
+                                'Data': responseData}
+                json_responseBody = json.dumps(responseBody)
+                print("Response body:\n" + json_responseBody)
+                headers = {
+                    'content-type' : '',
+                    'content-length' : str(len(json_responseBody))
+                }
+                try:
+                    response = http.request('PUT', responseUrl, headers=headers, body=json_responseBody)
+                    print("Status code: " + response.reason)
+                except Exception as e:
+                    print("send(..) failed executing requests.put(..): " + str(e))
+  Lambdatrigger:
+    Type: 'Custom::RouteTableLambda'
+    Properties:
+      ServiceToken: !GetAtt LambdaFunction.Arn
+      VPCID: !Ref VPC
+
+
+Outputs:
+  VPC:
+    Description: A reference to the created VPC
+    Value: !Ref VPC
+    Export:
+      Name: Bastion-VPC
+  VPCID:
+    Description: Created VPC CIDR block
+    Value: !GetAtt VPC.CidrBlock
+    Export:
+      Name: Bastion-CIDR
+  VPCRouteTable:
+    Description: Created VPC Main route table
+    Value: !GetAtt Lambdatrigger.RouteTableID
+    Export:
+      Name: Bastion-RouteTableID
+
+  PublicSubnets:
+    Description: A list of the public subnets
+    Value: !Join [ ",", [ !Ref PublicSubnet1, !Ref PublicSubnet2 ]]
+
+  PrivateSubnets:
+    Description: A list of the private subnets
+    Value: !Join [ ",", [ !Ref PrivateSubnet1, !Ref PrivateSubnet2 ]]
+
+  PublicSubnet1:
+    Description: A reference to the public subnet in the 1st Availability Zone
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: Bastion-Public-Subnet1
+
+  PublicSubnet2:
+    Description: A reference to the public subnet in the 2nd Availability Zone
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: Bastion-Public-Subnet2
+
+  PrivateSubnet1:
+    Description: A reference to the private subnet in the 1st Availability Zone
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: Bastion-Private-Subnet1
+
+  PrivateSubnet2:
+    Description: A reference to the private subnet in the 2nd Availability Zone
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: Bastion-Private-Subnet2
+
+
+
