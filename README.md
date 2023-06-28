@@ -1,5 +1,5 @@
 # AWS-CloudFormation-Config-for-MultiClient-Mgmt
-AWS CloudFormation Configurations to Create Multiple VPC as different companies, and access to them via peering from your own VPC, accessed by VPN
+AWS CloudFormation Configurations to Create Multiple VPC as different companies, and access to them via peering from your own VPC, accessed by VPN.  Hub-and-spokes topology
 
     +----------------------+
     | Your VPC             |
@@ -10,6 +10,7 @@ AWS CloudFormation Configurations to Create Multiple VPC as different companies,
     |     splunk           |
     +----------------------+
       |                       |
+    peering connection      peering connection
       |                       |
       V                       V
     +---------------------+ +---------------------+
