@@ -7,7 +7,7 @@ AWS CloudFormation Configurations to Create Multiple VPC as different companies,
     |   subnet1            |
     |     openvpn          |
     |   subnet2            |
-    |     splunk           |
+    |     syslog/splunk    |
     +----------------------+
       |                       |
     peering connection      peering connection
